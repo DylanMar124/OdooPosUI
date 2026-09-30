@@ -1,0 +1,1527 @@
+@page "/pos"
+@rendermode InteractiveServer
+@layout Layout.EmptyLayout
+@using System.Text
+@using System.Text.Json
+@using Odoo.WebUI.Services
+@inject OdooService OdooService
+@inject OdooAuthState AuthState
+@inject PosPipelineService Pipeline
+@inject IConfiguration Configuration
+@inject IJSRuntime JSRuntime
+@inject NavigationManager NavigationManager
+
+<PageTitle>Odoo POS - Terminal de Ventas</PageTitle>
+
+<div class="h-screen font-sans antialiased text-slate-800 bg-slate-100 flex flex-col overflow-hidden select-none">
+
+    <!-- ================= TOP HEADER ODOO POS ================= -->
+    <header class="h-16 bg-white border-b border-slate-200 px-5 flex items-center justify-between shrink-0 shadow-sm z-20">
+        <!-- Brand & Terminal Info -->
+        <div class="flex items-center gap-4">
+            <div class="flex items-center gap-2 pr-4 border-r border-slate-200">
+                <img alt="Odoo POS Logo" class="h-8 w-auto object-contain" src="https://lh3.googleusercontent.com/aida/AEtjO1VySIzsfY_x-MejS2o0Rcizxgz5ciRx2KHSm59aPNawSS0nwqXHpw_wNRrY0L5lLS9Vaurt671mTUkd7xtSMis6flkLyrJBifX7OyTbSB-mB5EqP6ntdZzO-QfIT6Db7lyG6hWfsZR4rwuMwHwF6L7ZrCDIIj2Et9wvC0rxubd7FRfdAoMhcTOJTy3tAT6j7wuZWi-P4RyhUEtjPc1ADlzIq6mWYrpY3NwzJBYI8j6syIoWQD5YRltwsjw" />
+            </div>
+            <div class="flex items-center gap-2">
+                <span class="inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500"></span>
+                <span class="text-xs font-bold text-slate-700">@(string.IsNullOrEmpty(sessionData?.ConfigName) ? "Powered By NexaSoft" : sessionData.ConfigName)</span>
+            </div>
+        </div>
+        <!-- Search Bar & Barcode Scanner Indicator -->
+        <div class="flex-1 max-w-xl mx-6">
+            <div class="relative">
+                <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
+                    </svg>
+                </div>
+                <input @bind="searchText" @bind:event="oninput"
+                       class="w-full pl-10 pr-16 py-2 bg-slate-50 hover:bg-slate-100/80 focus:bg-white text-sm font-medium text-slate-800 rounded-xl border border-slate-200 focus:outline-none focus:border-[#714B67] focus:ring-2 focus:ring-[#714B67]/20 transition placeholder-slate-400"
+                       placeholder="Escanear código de barras o buscar producto (F2)..." type="text" />
+                <div class="absolute inset-y-0 right-0 pr-2 flex items-center">
+                    <span class="text-[11px] font-mono px-1.5 py-0.5 rounded bg-slate-200 text-slate-600 border border-slate-300">⌘K</span>
+                </div>
+            </div>
+        </div>
+        <!-- Cashier Profile & Actions -->
+        <div class="flex items-center gap-3">
+            <div class="flex items-center gap-2.5 pl-3 py-1 pr-2 rounded-xl bg-slate-50 border border-slate-200">
+                <div class="w-7 h-7 rounded-lg bg-[#714B67] text-white flex items-center justify-center font-bold text-xs">
+                    AM
+                </div>
+                <div class="text-left hidden sm:block">
+                    <p class="text-xs font-bold text-slate-800 leading-tight">@(string.IsNullOrEmpty(AuthState.Username) ? "Cajero Odoo" : AuthState.Username)</p>
+                </div>
+            </div>
+            <button type="button" @onclick="LogoutAsync" class="p-2 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition border border-transparent hover:border-rose-100" title="Cerrar Sesión / Bloquear">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
+                </svg>
+            </button>
+        </div>
+    </header>
+
+    @if (!string.IsNullOrEmpty(loadError))
+    {
+        <div class="mx-6 mt-3 flex items-start gap-3 p-3.5 rounded-xl bg-rose-50/90 border border-rose-200/90 text-rose-800 text-xs shrink-0">
+            <div class="flex-1">
+                <span class="font-semibold">Error cargando productos.</span>
+                <span class="text-rose-700/90 block mt-0.5">@loadError (mostrando catálogo local).</span>
+            </div>
+            <button type="button" @onclick="() => loadError = null" class="text-rose-500 hover:text-rose-700 p-0.5 rounded font-bold">✕</button>
+        </div>
+    }
+
+    @if (!string.IsNullOrEmpty(payMessage))
+    {
+        <div class="mx-6 mt-3 flex items-start gap-3 p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs shrink-0">
+            <div class="flex-1">
+                <span class="font-semibold">Orden creada en Odoo.</span>
+                <span class="block mt-0.5">@payMessage</span>
+            </div>
+            <button type="button" @onclick="() => payMessage = null" class="p-0.5 rounded font-bold">✕</button>
+        </div>
+    }
+
+    @if (!string.IsNullOrEmpty(payError))
+    {
+        <div class="mx-6 mt-3 flex items-start gap-3 p-3.5 rounded-xl bg-amber-50/90 border border-amber-200/90 text-amber-900 text-xs shrink-0">
+            <div class="flex-1">
+                <span class="font-semibold">No se pudo cobrar.</span>
+                <span class="block mt-0.5">@payError</span>
+            </div>
+            <button type="button" @onclick="() => payError = null" class="p-0.5 rounded font-bold">✕</button>
+        </div>
+    }
+
+    @if (!isLoadingProducts && !sessionId.HasValue)
+    {
+        <div class="mx-6 mt-3 flex flex-wrap items-center gap-3 p-3.5 rounded-xl bg-[#714B67]/5 border border-[#714B67]/25 text-xs shrink-0">
+            <div class="flex-1 min-w-[220px]">
+                <span class="font-bold text-slate-800">Caja cerrada.</span>
+                <span class="text-slate-600 block mt-0.5">Abre la sesión e indica el efectivo inicial, como en Odoo.</span>
+            </div>
+            <button type="button" @onclick="() => OpenSessionModal()"
+                    class="px-4 py-2 rounded-xl text-xs font-bold bg-[#714B67] text-white shadow-sm transition hover:bg-[#5a3b52] active:scale-[0.98] whitespace-nowrap">
+                Abrir caja
+            </button>
+        </div>
+    }
+
+    @if (!isLoadingProducts && sessionId.HasValue && sessionState == "opening_control")
+    {
+        <div class="mx-6 mt-3 flex flex-wrap items-center gap-3 p-3.5 rounded-xl bg-amber-50/90 border border-amber-200/90 text-amber-900 text-xs shrink-0">
+            <div class="flex-1 min-w-[220px]">
+                <span class="font-bold">Caja sin iniciar (sesión #@sessionId).</span>
+                <span class="block mt-0.5">Hay una caja abierta pero falta el efectivo inicial para operarla.</span>
+            </div>
+            <button type="button" @onclick="() => OpenSessionModal()"
+                    class="px-4 py-2 rounded-xl text-xs font-bold bg-[#714B67] text-white shadow-sm transition hover:bg-[#5a3b52] active:scale-[0.98] whitespace-nowrap">
+                Iniciar caja
+            </button>
+        </div>
+    }
+
+    @if (!isLoadingProducts && sessionId.HasValue && sessionState == "closing_control")
+    {
+        <div class="mx-6 mt-3 flex flex-wrap items-center gap-3 p-3.5 rounded-xl bg-rose-50/90 border border-rose-200/90 text-rose-900 text-xs shrink-0">
+            <div class="flex-1 min-w-[220px]">
+                <span class="font-bold">Caja en control de cierre (sesión #@sessionId).</span>
+                <span class="block mt-0.5">El cierre quedó a medio validar: bloquea la entrada al POS y no deja abrir otra caja hasta terminarlo.</span>
+            </div>
+            <button type="button" @onclick="() => OpenSessionModal()"
+                    class="px-4 py-2 rounded-xl text-xs font-bold bg-rose-600 text-white shadow-sm transition hover:bg-rose-700 active:scale-[0.98] whitespace-nowrap">
+                Terminar cierre
+            </button>
+        </div>
+    }
+
+    <iframe id="print-frame" title="print" style="position:fixed;width:0;height:0;border:0;right:0;bottom:0;"></iframe>
+
+    <!-- ================= MAIN POS WORKSPACE: 70% PRODUCTS / 30% CART ================= -->
+    <div class="flex-1 flex overflow-hidden">
+        <!-- ================= LEFT AREA: 70% PRODUCT CATALOG ================= -->
+        <section class="w-[70%] flex flex-col bg-slate-100/70 border-r border-slate-200 overflow-hidden">
+            <!-- Category Filter Pills Bar -->
+            <div class="bg-white px-6 py-3 border-b border-slate-200 flex items-center justify-between shrink-0 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
+                <div class="flex items-center gap-2 overflow-x-auto pb-0.5">
+                    <button type="button" @onclick="() => selectedPosCategId = 0"
+                            class="@(selectedPosCategId == 0 ? "px-4 py-2 rounded-xl text-xs font-bold bg-[#714B67] text-white shadow-sm transition hover:bg-[#5a3b52] whitespace-nowrap"
+                                          : "px-4 py-2 rounded-xl text-xs font-semibold bg-slate-100 text-slate-600 hover:bg-slate-200/80 hover:text-slate-800 transition whitespace-nowrap")">
+                        Todas (@products.Count)
+                    </button>
+                    @foreach (var cat in posCategories)
+                    {
+                        var active = cat.Id == selectedPosCategId;
+                        <button type="button" @onclick="() => selectedPosCategId = cat.Id"
+                                class="@(active ? "px-4 py-2 rounded-xl text-xs font-bold bg-[#714B67] text-white shadow-sm transition hover:bg-[#5a3b52] whitespace-nowrap"
+                                              : "px-4 py-2 rounded-xl text-xs font-semibold bg-slate-100 text-slate-600 hover:bg-slate-200/80 hover:text-slate-800 transition whitespace-nowrap")">
+                            @CategLabel(cat)
+                        </button>
+                    }
+                </div>
+                <button type="button" @onclick="() => OpenSessionModal()" title="Gestionar caja"
+                        class="text-xs text-slate-500 hover:text-slate-800 font-medium pl-4 hidden md:flex items-center gap-1.5 shrink-0 transition">
+                    <span class="w-2 h-2 rounded-full @(sessionId.HasValue && sessionState == "opened" ? "bg-odooTeal" : sessionState == "closing_control" ? "bg-rose-500" : "bg-amber-500")"></span>
+                    <span>@(isLoadingProducts ? "Sincronizando..." : !sessionId.HasValue ? "Sin sesión POS abierta • Gestionar" : sessionState == "opened" ? $"Sincronizado con Odoo • Sesión #{sessionId}" : sessionState == "closing_control" ? $"Caja en cierre #{sessionId} • Gestionar" : $"Caja sin iniciar #{sessionId} • Gestionar")</span>
+                </button>
+            </div>
+
+            <!-- Responsive Product Grid (4 columns) with States -->
+            <div class="flex-1 overflow-y-auto p-6">
+                @if (isLoadingProducts)
+                {
+                    <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
+                        @for (var i = 0; i < 8; i++)
+                        {
+                            <div class="bg-white rounded-2xl p-3.5 border border-slate-200 shadow-sm animate-pulse flex flex-col justify-between">
+                                <div>
+                                    <div class="w-full h-36 rounded-xl bg-slate-200 mb-3 relative overflow-hidden">
+                                        <div class="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent"></div>
+                                    </div>
+                                    <div class="h-4 bg-slate-200 rounded w-3/4 mb-2"></div>
+                                    <div class="h-3 bg-slate-200 rounded w-1/2"></div>
+                                </div>
+                                <div class="mt-4 pt-2.5 border-t border-slate-100 flex items-center justify-between">
+                                    <div class="h-5 bg-slate-200 rounded w-14"></div>
+                                    <div class="w-8 h-8 rounded-lg bg-slate-200"></div>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+                else if (FilteredProducts.Count == 0)
+                {
+                    <div class="text-center p-10 bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
+                        <p class="text-xs font-bold text-slate-600">Sin resultados</p>
+                        <p class="text-[11px] text-slate-400 mt-0.5">Ajusta el buscador o la categoría seleccionada.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
+                        @foreach (var p in FilteredProducts)
+                        {
+                            var outOfStock = p.QtyAvailable <= 0;
+                            if (outOfStock)
+                            {
+                                <div class="relative bg-white/70 rounded-2xl p-3.5 border border-dashed border-slate-300 shadow-none flex flex-col justify-between opacity-75 cursor-not-allowed">
+                                    <div>
+                                        <div class="relative w-full h-36 rounded-xl bg-slate-200 overflow-hidden mb-3 filter grayscale">
+                                            <img alt="@p.Name" class="w-full h-full object-cover" src="@ImgUrl(p.Id)" onerror="this.onerror=null;this.src='https://www.gstatic.com/labs-code/stitch/stitch-placeholder-300x300.svg'" />
+                                            <span class="absolute inset-0 bg-slate-900/40 flex items-center justify-center">
+                                                <span class="px-2.5 py-1 rounded-md text-[11px] font-black uppercase tracking-wider bg-rose-600 text-white shadow">
+                                                    Agotado
+                                                </span>
+                                            </span>
+                                        </div>
+                                        <h3 class="font-bold text-sm text-slate-500 leading-snug line-clamp-1">@p.Name</h3>
+                                        <p class="text-[11px] text-slate-400 font-medium mt-0.5">@p.Category</p>
+                                    </div>
+                                    <div class="mt-3 pt-2.5 border-t border-slate-200 flex items-center justify-between">
+                                        <span class="text-base font-bold text-slate-400">$@p.Price.ToString("0.00")</span>
+                                        <button class="w-8 h-8 rounded-lg bg-slate-200 text-slate-400 flex items-center justify-center cursor-not-allowed" disabled>
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
+                                            </svg>
+                                        </button>
+                                    </div>
+                                </div>
+                            }
+                            else
+                            {
+                                <div @onclick="() => OpenProductModal(p)" class="group relative bg-white rounded-2xl p-3.5 border border-slate-200/90 shadow-sm hover:shadow-md hover:border-[#714B67]/40 transition-all duration-200 flex flex-col justify-between cursor-pointer active:scale-[0.98]">
+                                    <div>
+                                        <div class="relative w-full h-36 rounded-xl bg-slate-100 overflow-hidden mb-3">
+                                            <img alt="@p.Name" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" src="@ImgUrl(p.Id)" loading="lazy" onerror="this.onerror=null;this.src='https://www.gstatic.com/labs-code/stitch/stitch-placeholder-300x300.svg'" />
+                                            <span class="absolute top-2 right-2 px-2 py-0.5 rounded-full text-[11px] font-bold @(p.QtyAvailable <= 5 ? "bg-amber-100 text-amber-800 border border-amber-200/60" : "bg-emerald-100 text-emerald-800 border border-emerald-200/60") shadow-xs">
+                                                Stock: @p.QtyAvailable@(p.QtyAvailable <= 5 ? " (Bajo)" : "")
+                                            </span>
+                                        </div>
+                                        <h3 class="font-bold text-sm text-slate-900 leading-snug line-clamp-1 group-hover:text-[#714B67] transition-colors">@p.Name</h3>
+                                        <p class="text-[11px] text-slate-400 font-medium mt-0.5">@p.Category</p>
+                                    </div>
+                                    <div class="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between">
+                                        <span class="text-base font-extrabold text-slate-900">$@p.Price.ToString("0.00")</span>
+                                        <button type="button" @onclick="() => AddToCart(p)" @onclick:stopPropagation="true" class="w-8 h-8 rounded-lg bg-slate-100 group-hover:bg-[#714B67] text-slate-600 group-hover:text-white flex items-center justify-center transition-colors shadow-xs">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path d="M12 4v16m8-8H4" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"></path>
+                                            </svg>
+                                        </button>
+                                    </div>
+                                </div>
+                            }
+                        }
+                    </div>
+                }
+            </div>
+        </section>
+
+        <!-- ================= RIGHT AREA: 30% CART AREA ================= -->
+        <aside class="w-[30%] bg-white flex flex-col justify-between shadow-lg relative z-10 border-l border-slate-200">
+            <!-- Top Cart Header & Customer Selector -->
+            <div class="p-4 border-b border-slate-200 bg-slate-50/70">
+                <div class="flex items-center justify-between mb-3">
+                    <div class="flex items-center gap-2">
+                        <span class="text-sm font-extrabold text-slate-800 tracking-tight">Ticket Actual</span>
+                        <span class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-[#714B67]/10 text-[#714B67]">#1042</span>
+                    </div>
+                    <button type="button" @onclick="ClearCart" class="text-xs text-rose-600 hover:text-rose-700 font-semibold hover:underline flex items-center gap-1">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
+                        </svg>
+                        Vaciar
+                    </button>
+                </div>
+                <!-- Customer Selector Dropdown (clientes reales de Odoo) -->
+                <div>
+                    <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">Cliente Asignado</label>
+                    <input type="text" @bind="customerSearch" @bind:event="oninput"
+                           placeholder="Buscar cliente..."
+                           class="w-full mb-1.5 bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-semibold text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#714B67] focus:ring-2 focus:ring-[#714B67]/20 transition shadow-xs" />
+                    <div class="relative">
+                        <select value="@selectedPartnerId" @onchange="OnCustomerChanged"
+                                class="w-full appearance-none bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-[#714B67] focus:ring-2 focus:ring-[#714B67]/20 transition pr-8 shadow-xs cursor-pointer">
+                            <option value="0">👤 Cliente Mostrador (General)</option>
+                            @foreach (var c in FilteredCustomers)
+                            {
+                                <option value="@c.Id">@c.Label</option>
+                            }
+                            <option value="-1">+ Registrar nuevo cliente Odoo</option>
+                        </select>
+                        <div class="absolute inset-y-0 right-0 flex items-center px-2.5 pointer-events-none text-slate-400">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path d="M19 9l-7 7-7-7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
+                            </svg>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- List of Selected Products (Cart Items) -->
+            <div class="flex-1 overflow-y-auto p-4 space-y-3">
+                @if (!string.IsNullOrEmpty(stockNotice))
+                {
+                    <div class="flex items-start gap-2 p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-[11px]">
+                        <span class="flex-1 font-medium">@stockNotice</span>
+                        <button type="button" @onclick="() => stockNotice = null" class="font-bold shrink-0">✕</button>
+                    </div>
+                }
+                @if (cart.Count == 0)
+                {
+                    <div class="mt-4 pt-4 border-t border-dashed border-slate-200 text-center p-4 bg-slate-50/50 rounded-xl">
+                        <div class="w-10 h-10 mx-auto mb-2 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7"></path>
+                            </svg>
+                        </div>
+                        <p class="text-xs font-bold text-slate-600">Estado Vacío (Empty State)</p>
+                        <p class="text-[11px] text-slate-400 mt-0.5">Escanea un producto o selecciónalo del menú para agregarlo.</p>
+                    </div>
+                }
+                else
+                {
+                    @foreach (var item in cart)
+                    {
+                        <div class="p-3 rounded-xl bg-slate-50 border border-slate-200/80 hover:border-slate-300 transition flex items-center justify-between gap-2">
+                            <div class="flex-1 min-w-0">
+                                <h4 class="text-xs font-bold text-slate-900 truncate">@item.Name</h4>
+                                <div class="text-[11px] text-slate-500 font-medium mt-0.5">$@item.UnitPrice.ToString("0.00") c/u</div>
+                            </div>
+                            <div class="flex items-center gap-1.5 shrink-0">
+                                <div class="flex items-center bg-white border border-slate-200 rounded-lg shadow-xs overflow-hidden">
+                                    <button type="button" @onclick="() => DecreaseQty(item)" class="w-7 h-7 flex items-center justify-center text-slate-600 hover:bg-slate-100 active:bg-slate-200 text-xs font-bold transition">
+                                        −
+                                    </button>
+                                    <span class="w-7 text-center text-xs font-extrabold text-slate-800">@item.Qty</span>
+                                    <button type="button" @onclick="() => IncreaseQty(item)" disabled="@AtMax(item)" title="@(AtMax(item) ? "Stock máximo alcanzado" : "Agregar uno")" class="w-7 h-7 flex items-center justify-center text-slate-600 hover:bg-slate-100 active:bg-slate-200 text-xs font-bold transition disabled:opacity-40 disabled:cursor-not-allowed">
+                                        +
+                                    </button>
+                                </div>
+                                <span class="w-14 text-right text-xs font-extrabold text-slate-900">$@item.LineTotal.ToString("0.00")</span>
+                                <button type="button" @onclick="() => Remove(item)" class="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition" title="Eliminar producto">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                    }
+                }
+            </div>
+
+            <!-- Bottom of Cart: Subtotal, IVA 16%, Total Bold & Large Buttons -->
+            <div class="p-5 bg-slate-50 border-t border-slate-200 shrink-0 space-y-4">
+                <!-- Summary Calculations -->
+                <div class="space-y-1.5 text-xs text-slate-600">
+                    <div class="flex justify-between font-medium">
+                        <span>Subtotal (@TotalItems artículos)</span>
+                        <span class="font-bold text-slate-800">$@Subtotal.ToString("0.00")</span>
+                    </div>
+                    <div class="flex justify-between font-medium">
+                        <span>IVA (@(DefaultTaxRate > 0 ? $"{DefaultTaxRate:P0} " : "")Odoo Fiscal)</span>
+                        <span class="font-bold text-slate-800">$@Iva.ToString("0.00")</span>
+                    </div>
+                    <div class="pt-2 border-t border-slate-200 flex justify-between items-baseline">
+                        <span class="text-sm font-bold text-slate-700">Total a Pagar</span>
+                        <span class="text-3xl font-extrabold text-slate-900 tracking-tight">$@Total.ToString("0.00")</span>
+                    </div>
+                </div>
+                <!-- Two Large Payment Action Buttons -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                    <button type="button" @onclick="CheckoutCash" disabled="@(cart.Count == 0 || isPaying)"
+                            class="w-full py-3.5 px-3 rounded-xl bg-slate-900 hover:bg-black text-white font-bold text-xs flex flex-col items-center justify-center gap-1 shadow-md active:scale-[0.98] transition group disabled:opacity-50">
+                        <div class="flex items-center gap-1.5">
+                            <svg class="w-4 h-4 text-emerald-400 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <rect height="12" rx="2" stroke-width="2" width="20" x="2" y="6"></rect>
+                                <circle cx="12" cy="12" r="3" stroke-width="2"></circle>
+                                <path d="M6 12h.01M18 12h.01" stroke-linecap="round" stroke-width="2"></path>
+                            </svg>
+                            <span>@(isPaying ? "Procesando..." : "Cobrar en Efectivo")</span>
+                        </div>
+                        <span class="text-[10px] text-slate-400 font-normal">F8 • @CashMethodLabel</span>
+                    </button>
+                    <button type="button" @onclick="CheckoutCard" disabled="@(cart.Count == 0 || isPaying)"
+                            class="w-full py-3.5 px-3 rounded-xl bg-white hover:bg-slate-100 text-slate-900 border-2 border-slate-300 font-bold text-xs flex flex-col items-center justify-center gap-1 shadow-xs active:scale-[0.98] transition group disabled:opacity-50">
+                        <div class="flex items-center gap-1.5">
+                            <svg class="w-4 h-4 text-[#714B67] group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <rect height="14" rx="2" stroke-width="2" width="20" x="2" y="5"></rect>
+                                <line stroke-width="2" x1="2" x2="22" y1="10" y2="10"></line>
+                            </svg>
+                            <span>Cobrar con Tarjeta</span>
+                        </div>
+                        <span class="text-[10px] text-slate-500 font-normal">F9 • @CardMethodLabel</span>
+                    </button>
+                </div>
+                <!-- Payment Methods Icons Supported -->
+                <div class="flex items-center justify-center gap-3 pt-1 text-[11px] text-slate-400">
+                    <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Métodos aceptados:</span>
+                    <div class="flex items-center gap-2">
+                        <span class="px-1.5 py-0.5 rounded bg-white border border-slate-200 font-bold text-[9px] text-blue-800">VISA</span>
+                        <span class="px-1.5 py-0.5 rounded bg-white border border-slate-200 font-bold text-[9px] text-amber-600">MC</span>
+                        <span class="px-1.5 py-0.5 rounded bg-white border border-slate-200 font-semibold text-[9px] text-slate-700">Apple Pay</span>
+                        <span class="px-1.5 py-0.5 rounded bg-white border border-slate-200 font-semibold text-[9px] text-slate-700">Odoo Account</span>
+                    </div>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <!-- ================= MODAL GESTIÓN DE CAJA (estilo Odoo) ================= -->
+    @if (showSessionModal)
+    {
+        var isCloseMode = sessionId.HasValue && (sessionState == "opened" || sessionState == "closing_control");
+        var isClosingStuck = sessionState == "closing_control";
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
+            <div class="w-full max-w-[440px] bg-white rounded-2xl shadow-xl shadow-slate-900/20 border border-slate-200/80 p-8">
+                <div class="flex items-start justify-between mb-5">
+                    <div>
+                        <h2 class="text-lg font-extrabold tracking-tight text-slate-900">
+                            @(!sessionId.HasValue ? "Abrir caja" : isClosingStuck ? "Terminar cierre" : sessionState == "opened" ? "Cerrar caja" : "Iniciar caja")
+                        </h2>
+                        <p class="text-xs text-slate-500 mt-0.5 font-medium">
+                            @(!sessionId.HasValue ? "Selecciona el punto de venta e indica el efectivo inicial."
+                              : isClosingStuck ? $"Sesión #{sessionId} atorada en control de cierre: valídala para liberar la caja."
+                              : sessionState == "opened" ? $"Sesión #{sessionId} en operación."
+                              : $"Sesión #{sessionId} creada, pendiente de iniciar.")
+                        </p>
+                    </div>
+                    <button type="button" @onclick="CloseSessionModal" class="text-slate-400 hover:text-slate-700 p-1 rounded-lg">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+
+                <div class="space-y-4">
+                    @if (!sessionId.HasValue)
+                    {
+                        <div>
+                            <label class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">Punto de venta</label>
+                            @if (posConfigs.Count > 0)
+                            {
+                                <select @bind="selectedConfigId"
+                                        class="w-full appearance-none bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-slate-800 focus:outline-none focus:border-[#714B67] focus:ring-2 focus:ring-[#714B67]/20 transition shadow-xs cursor-pointer">
+                                    @foreach (var c in posConfigs)
+                                    {
+                                        <option value="@c.Id">@c.Name</option>
+                                    }
+                                </select>
+                            }
+                            else
+                            {
+                                <p class="text-xs text-slate-500">No se encontraron puntos de venta en Odoo.</p>
+                            }
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">Efectivo inicial</label>
+                            <input type="number" min="0" step="0.01" @bind="openingCash"
+                                   class="block w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 font-medium focus:border-[#714B67] focus:ring-2 focus:ring-[#714B67]/20 focus:outline-none transition bg-slate-50/50"
+                                   placeholder="0.00" />
+                        </div>
+                    }
+                    else if (!isCloseMode)
+                    {
+                        <div>
+                            <label class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">Efectivo inicial</label>
+                            <input type="number" min="0" step="0.01" @bind="openingCash"
+                                   class="block w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 font-medium focus:border-[#714B67] focus:ring-2 focus:ring-[#714B67]/20 focus:outline-none transition bg-slate-50/50"
+                                   placeholder="0.00" />
+                        </div>
+                    }
+                    else
+                    {
+                        <div>
+                            <label class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">Efectivo contado al cierre</label>
+                            <input type="number" min="0" step="0.01" @bind="closingCash"
+                                   class="block w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 font-medium focus:border-[#714B67] focus:ring-2 focus:ring-[#714B67]/20 focus:outline-none transition bg-slate-50/50"
+                                   placeholder="0.00" />
+                        </div>
+                        @* Etapa 11: datos de cierre para validar antes de postear *@
+                        <div class="rounded-xl bg-slate-50 border border-slate-200 p-3.5 text-xs text-slate-600 space-y-1.5">
+                            <p class="font-bold text-slate-800 uppercase tracking-wider text-[11px]">Datos de cierre (Odoo)</p>
+                            @if (isLoadingClosing)
+                            {
+                                <p class="text-slate-400">Cargando datos de cierre...</p>
+                            }
+                            else if (!string.IsNullOrEmpty(closeLoadError))
+                            {
+                                <div class="p-3 rounded-xl bg-rose-50/90 border border-rose-200/90 text-rose-800">
+                                    <p class="font-bold">No se pudieron leer los datos de cierre (sesión #@sessionId).</p>
+                                    <p class="mt-0.5 break-words">@closeLoadError</p>
+                                    <button type="button" @onclick="ReloadClosingDataAsync"
+                                            class="mt-2 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-white border border-rose-300 hover:bg-rose-100 transition">
+                                        Reintentar
+                                    </button>
+                                </div>
+                            }
+                            else if (closingData is not null)
+                            {
+                                <div class="flex justify-between font-medium">
+                                    <span>Órdenes (@closingData.OrdersCount)</span>
+                                    <span class="font-bold text-slate-800">$@closingData.TotalAmount.ToString("0.00")</span>
+                                </div>
+                                <div class="flex justify-between font-medium">
+                                    <span>Efectivo esperado</span>
+                                    <span class="font-bold text-slate-800">$@closingData.ExpectedCash.ToString("0.00")</span>
+                                </div>
+                                @foreach (var pm in closingData.Payments)
+                                {
+                                    <div class="flex justify-between">
+                                        <span>@pm.MethodName</span>
+                                        <span class="font-semibold text-slate-700">$@pm.Amount.ToString("0.00")</span>
+                                    </div>
+                                }
+                                @if (closingData.OrdersCount == 0 && closingData.Payments.Count == 0)
+                                {
+                                    <p class="text-slate-400">Sesión sin movimientos (verificado en Odoo).</p>
+                                }
+                                @if (!string.IsNullOrEmpty(closingData.LoadWarning))
+                                {
+                                    <p class="text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">@closingData.LoadWarning</p>
+                                }
+                            }
+                            else
+                            {
+                                <p class="text-slate-400">Sin datos de cierre (sesión sin movimientos).</p>
+                            }
+                        </div>
+                    }
+
+                    <div>
+                        <label class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">Notas (opcional)</label>
+                        <input type="text" @bind="cashNotes"
+                               class="block w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 placeholder-slate-400 font-medium focus:border-[#714B67] focus:ring-2 focus:ring-[#714B67]/20 focus:outline-none transition bg-slate-50/50"
+                               placeholder="Observaciones de caja" />
+                    </div>
+
+                    @if (!string.IsNullOrEmpty(payError))
+                    {
+                        <div class="p-3 rounded-xl bg-rose-50/90 border border-rose-200/90 text-rose-800 text-xs">@payError</div>
+                    }
+
+                    <div class="flex gap-2.5 pt-1">
+                        <button type="button" @onclick="CloseSessionModal" disabled="@isProcessingSession"
+                                class="flex-1 py-3 px-4 rounded-xl text-sm font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 transition disabled:opacity-50">
+                            Cancelar
+                        </button>
+                        @if (!isCloseMode)
+                        {
+                            <button type="button" @onclick="ConfirmSessionModalAsync" disabled="@isProcessingSession"
+                                    class="flex-1 py-3 px-4 rounded-xl text-sm font-bold text-white bg-[#714B67] hover:bg-[#5c3a53] transition shadow-md shadow-[#714B67]/25 disabled:opacity-70 disabled:cursor-wait">
+                                @if (isProcessingSession)
+                                {
+                                    <span class="flex items-center justify-center gap-2">
+                                        <svg class="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                                        </svg>
+                                        <span>Procesando...</span>
+                                    </span>
+                                }
+                                else
+                                {
+                                    <span>@(!sessionId.HasValue ? "Abrir caja" : "Iniciar caja")</span>
+                                }
+                            </button>
+                        }
+                        else
+                        {
+                            <button type="button" @onclick="ConfirmSessionModalAsync" disabled="@isProcessingSession"
+                                    class="flex-1 py-3 px-4 rounded-xl text-sm font-bold text-white bg-rose-600 hover:bg-rose-700 transition shadow-md shadow-rose-600/25 disabled:opacity-70 disabled:cursor-wait">
+                                @(isProcessingSession ? "Cerrando..." : isClosingStuck ? "Terminar cierre" : "Cerrar caja")
+                            </button>
+                        }
+                    </div>
+                    @if (isCloseMode && showForceClose)
+                    {
+                        <button type="button" @onclick="ForceCloseAsync" disabled="@isProcessingSession"
+                                class="w-full mt-2.5 py-3 px-4 rounded-xl text-sm font-bold text-amber-900 bg-amber-100 hover:bg-amber-200 border border-amber-300 transition disabled:opacity-50">
+                            Forzar cierre (acepta el descuadre contable)
+                        </button>
+                    }
+                </div>
+            </div>
+        </div>
+    }
+
+    <!-- ================= MODAL FICHA DE PRODUCTO (etapa 8) ================= -->
+    @if (showProductModal && modalProduct is not null)
+    {
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
+            <div class="w-full max-w-[440px] bg-white rounded-2xl shadow-xl shadow-slate-900/20 border border-slate-200/80 p-8">
+                <div class="flex items-start justify-between mb-4">
+                    <div>
+                        <h2 class="text-lg font-extrabold tracking-tight text-slate-900">@modalProduct.Name</h2>
+                        <p class="text-xs text-slate-500 mt-0.5 font-medium">@modalProduct.Category</p>
+                    </div>
+                    <button type="button" @onclick="CloseProductModal" class="text-slate-400 hover:text-slate-700 p-1 rounded-lg">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+
+                @if (isLoadingInfo)
+                {
+                    <div class="animate-pulse space-y-2 py-2">
+                        <div class="h-4 bg-slate-200 rounded w-3/4"></div>
+                        <div class="h-3 bg-slate-200 rounded w-1/2"></div>
+                        <div class="h-3 bg-slate-200 rounded w-2/3"></div>
+                    </div>
+                }
+                else if (selectedInfo is not null)
+                {
+                    <div class="rounded-xl bg-slate-50 border border-slate-200 p-3.5 text-xs text-slate-600 space-y-1.5 mb-4">
+                        <div class="flex justify-between">
+                            <span>Código de barras</span>
+                            <span class="font-bold text-slate-800">@(string.IsNullOrEmpty(selectedInfo.Barcode) ? "—" : selectedInfo.Barcode)</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span>Unidad</span>
+                            <span class="font-bold text-slate-800">@(string.IsNullOrEmpty(selectedInfo.Uom) ? "—" : selectedInfo.Uom)</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span>Impuestos</span>
+                            <span class="font-bold text-slate-800">@InfoTaxNames()</span>
+                        </div>
+                        @if (!string.IsNullOrEmpty(selectedInfo.Description))
+                        {
+                            <p class="pt-1 text-slate-500">@selectedInfo.Description</p>
+                        }
+                    </div>
+                }
+
+                <div class="flex items-center justify-between gap-3">
+                    <div class="flex items-center bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
+                        <button type="button" @onclick="() => modalQty = Math.Max(1, modalQty - 1)" class="w-10 h-11 flex items-center justify-center text-slate-600 hover:bg-slate-100 text-base font-bold transition">−</button>
+                        <span class="w-10 text-center text-sm font-extrabold text-slate-800">@modalQty</span>
+                        <button type="button" @onclick="() => modalQty++" class="w-10 h-11 flex items-center justify-center text-slate-600 hover:bg-slate-100 text-base font-bold transition">+</button>
+                    </div>
+                    <button type="button" @onclick="() => AddToCartQty(modalProduct, modalQty)"
+                            class="flex-1 py-3 px-4 rounded-xl text-sm font-bold text-white bg-[#714B67] hover:bg-[#5c3a53] transition shadow-md shadow-[#714B67]/25 active:scale-[0.99]">
+                        Agregar $@((modalProduct.Price * modalQty).ToString("0.00"))
+                    </button>
+                </div>
+            </div>
+        </div>
+    }
+
+    <!-- ================= MODAL NUEVO CLIENTE ================= -->
+    @if (showCustomerModal)
+    {
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
+            <div class="w-full max-w-[440px] bg-white rounded-2xl shadow-xl shadow-slate-900/20 border border-slate-200/80 p-8">
+                <div class="flex items-start justify-between mb-5">
+                    <div>
+                        <h2 class="text-lg font-extrabold tracking-tight text-slate-900">Registrar cliente</h2>
+                        <p class="text-xs text-slate-500 mt-0.5 font-medium">Se crea en Odoo y queda asignado al ticket.</p>
+                    </div>
+                    <button type="button" @onclick="() => showCustomerModal = false" class="text-slate-400 hover:text-slate-700 p-1 rounded-lg">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">Nombre *</label>
+                        <input type="text" @bind="custName"
+                               class="block w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 placeholder-slate-400 font-medium focus:border-[#714B67] focus:ring-2 focus:ring-[#714B67]/20 focus:outline-none transition bg-slate-50/50"
+                               placeholder="Nombre del cliente" />
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">Correo</label>
+                        <input type="email" @bind="custEmail"
+                               class="block w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 placeholder-slate-400 font-medium focus:border-[#714B67] focus:ring-2 focus:ring-[#714B67]/20 focus:outline-none transition bg-slate-50/50"
+                               placeholder="cliente@correo.com" />
+                    </div>
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">Teléfono</label>
+                            <input type="tel" @bind="custPhone"
+                                   class="block w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 placeholder-slate-400 font-medium focus:border-[#714B67] focus:ring-2 focus:ring-[#714B67]/20 focus:outline-none transition bg-slate-50/50"
+                                   placeholder="555 123 4567" />
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">RFC</label>
+                            <input type="text" @bind="custVat"
+                                   class="block w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 placeholder-slate-400 font-medium focus:border-[#714B67] focus:ring-2 focus:ring-[#714B67]/20 focus:outline-none transition bg-slate-50/50"
+                                   placeholder="RFC" />
+                        </div>
+                    </div>
+
+                    <div class="flex gap-2.5 pt-1">
+                        <button type="button" @onclick="() => showCustomerModal = false" disabled="@isSavingCustomer"
+                                class="flex-1 py-3 px-4 rounded-xl text-sm font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 transition disabled:opacity-50">
+                            Cancelar
+                        </button>
+                        <button type="button" @onclick="SaveCustomerAsync" disabled="@(isSavingCustomer || string.IsNullOrWhiteSpace(custName))"
+                                class="flex-1 py-3 px-4 rounded-xl text-sm font-bold text-white bg-[#714B67] hover:bg-[#5c3a53] transition shadow-md shadow-[#714B67]/25 disabled:opacity-50 disabled:cursor-not-allowed">
+                            @(isSavingCustomer ? "Guardando..." : "Guardar cliente")
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+
+    <!-- ================= MODAL TICKET (ReceiptScreen Odoo) ================= -->
+    @if (showTicketModal && lastTicket is not null)
+    {
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
+            <div class="w-full max-w-[340px] bg-white rounded-2xl shadow-xl shadow-slate-900/20 border border-slate-200/80 max-h-[90vh] overflow-y-auto">
+                <div id="ticket-print" class="p-6 font-mono text-xs text-slate-900">
+                    <div class="text-center">
+                        <p class="font-extrabold text-sm">@lastTicket.ConfigName</p>
+                        <p class="mt-0.5">Ticket de venta</p>
+                    </div>
+                    <div class="border-t border-dashed border-slate-400 my-2"></div>
+                    <div class="space-y-0.5">
+                        <div class="flex justify-between"><span>Orden</span><span class="font-bold">#@lastTicket.OrderId</span></div>
+                        <div class="flex justify-between"><span>Fecha</span><span>@lastTicket.Date.ToString("dd/MM/yyyy HH:mm")</span></div>
+                        <div class="flex justify-between"><span>Cajero</span><span>@lastTicket.Cashier</span></div>
+                        <div class="flex justify-between"><span>Cliente</span><span>@lastTicket.Customer</span></div>
+                        <div class="flex justify-between"><span>Sesión</span><span>#@lastTicket.SessionId</span></div>
+                    </div>
+                    <div class="border-t border-dashed border-slate-400 my-2"></div>
+                    @foreach (var l in lastTicket.Lines)
+                    {
+                        <div class="flex justify-between gap-2 py-0.5">
+                            <span class="flex-1">@l.Qty x @l.Name ($@l.UnitPrice.ToString("0.00"))</span>
+                            <span class="font-bold shrink-0">$@l.LineTotal.ToString("0.00")</span>
+                        </div>
+                    }
+                    <div class="border-t border-dashed border-slate-400 my-2"></div>
+                    <div class="flex justify-between"><span>Subtotal</span><span>$@lastTicket.Subtotal.ToString("0.00")</span></div>
+                    <div class="flex justify-between"><span>IVA</span><span>$@lastTicket.Tax.ToString("0.00")</span></div>
+                    <div class="flex justify-between text-base font-extrabold mt-1"><span>TOTAL</span><span>$@lastTicket.Total.ToString("0.00")</span></div>
+                    <div class="border-t border-dashed border-slate-400 my-2"></div>
+                    <div class="flex justify-between"><span>Pago</span><span>@lastTicket.MethodLabel</span></div>
+                    <div class="flex justify-between"><span>Monto</span><span>$@lastTicket.Total.ToString("0.00")</span></div>
+                    <div class="flex justify-between"><span>Cambio</span><span>$0.00</span></div>
+                    <div class="border-t border-dashed border-slate-400 my-2"></div>
+                    <p class="text-center font-bold">¡Gracias por su compra!</p>
+                </div>
+                <div class="flex gap-2.5 p-4 pt-0">
+                    <button type="button" @onclick="() => showTicketModal = false"
+                            class="flex-1 py-3 px-4 rounded-xl text-sm font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 transition">
+                        Cerrar
+                    </button>
+                    <button type="button" @onclick="PrintTicketAsync"
+                            class="flex-1 py-3 px-4 rounded-xl text-sm font-bold text-white bg-slate-900 hover:bg-black transition shadow-md active:scale-[0.99]">
+                        Imprimir ticket
+                    </button>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private List<ProductDto> products = new();
+    private List<CartItem> cart = new();
+    private string? stockNotice;
+    private List<PosCategoryDto> posCategories = new();
+    private int selectedPosCategId;
+    private string searchText = string.Empty;
+    private bool isLoadingProducts = true;
+    private bool isPaying;
+    private string? loadError;
+    private string? payMessage;
+    private string? payError;
+    private int? sessionId;
+    private string? sessionState;
+    private PosSessionData? sessionData;
+    private List<PosConfigDto> posConfigs = new();
+    private int selectedConfigId;
+    private bool showSessionModal;
+    private bool isProcessingSession;
+    private bool showForceClose;
+    private decimal openingCash;
+    private decimal closingCash;
+    private string cashNotes = string.Empty;
+    private PosClosingControlData? closingData;
+    private bool isLoadingClosing;
+    private string? closeLoadError;
+    private ProductDto? modalProduct;
+    private PosProductInfo? selectedInfo;
+    private bool showProductModal;
+    private bool isLoadingInfo;
+    private int modalQty = 1;
+    private TicketDto? lastTicket;
+    private bool showTicketModal;
+    private List<PosCustomerDto> customers = new();
+    private string customerSearch = string.Empty;
+    private int selectedPartnerId;
+    private bool showCustomerModal;
+    private bool isSavingCustomer;
+    private string custName = string.Empty;
+    private string custEmail = string.Empty;
+    private string custPhone = string.Empty;
+    private string custVat = string.Empty;
+
+    private List<ProductDto> FilteredProducts
+    {
+        get
+        {
+            IEnumerable<ProductDto> q = products;
+
+            if (!string.IsNullOrWhiteSpace(searchText))
+            {
+                var s = searchText.Trim().ToLowerInvariant();
+                q = q.Where(p => p.Name.ToLowerInvariant().Contains(s));
+            }
+
+            // Filtro oficial: la categoría incluye sus descendientes
+            if (selectedPosCategId != 0)
+            {
+                var scope = CategoryScope(selectedPosCategId);
+                q = q.Where(p => p.PosCategIds.Any(scope.Contains));
+            }
+
+            return q.ToList();
+        }
+    }
+
+    private HashSet<int> CategoryScope(int root)
+    {
+        var kids = posCategories.GroupBy(c => c.ParentId).ToDictionary(g => g.Key, g => g.Select(c => c.Id).ToList());
+        var scope = new HashSet<int> { root };
+        var stack = new Stack<int>(new[] { root });
+        while (stack.Count > 0)
+        {
+            var cur = stack.Pop();
+            if (!kids.TryGetValue(cur, out var list)) continue;
+            foreach (var k in list)
+                if (scope.Add(k))
+                    stack.Push(k);
+        }
+        return scope;
+    }
+
+    private string CategLabel(PosCategoryDto c)
+    {
+        var depth = 0;
+        var byId = posCategories.ToDictionary(x => x.Id);
+        var cur = c;
+        var guard = 0;
+        while (cur.ParentId != 0 && byId.TryGetValue(cur.ParentId, out var parent) && guard++ < 10)
+        {
+            depth++;
+            cur = parent;
+        }
+        return (depth > 0 ? "↳ " : "") + c.Name;
+    }
+
+    private decimal Subtotal => cart.Sum(i => i.LineTotal);
+    private int TotalItems => cart.Sum(i => i.Qty);
+    /// <summary>Tasa fiscal por defecto (respaldo cuando el producto no trae impuestos en Odoo).</summary>
+    private decimal DefaultTaxRate => Configuration.GetValue<decimal>("Pos:DefaultTaxRate");
+    // IVA real por línea (redondeo por línea, igual que el servicio)
+    private decimal Iva => cart.Sum(i => Math.Round(i.LineTotal * i.TaxRate, 2));
+    private decimal Total => Subtotal + Iva;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        // Guard real: restaura la sesión persistida (sobrevive a F5). Sin login, fuera.
+        // Durante el prerender TryRestoreAsync devuelve false (sin JS interop); el
+        // intento válido ocurre al conectar el circuito interactivo.
+        if (!await AuthState.TryRestoreAsync())
+        {
+            NavigationManager.NavigateTo("/login");
+            return;
+        }
+
+        await Task.WhenAll(LoadProductsAsync(), LoadCustomersAsync());
+    }
+
+    private async Task LogoutAsync()
+    {
+        await AuthState.LogoutAsync();
+        NavigationManager.NavigateTo("/login");
+    }
+
+    private async Task LoadCustomersAsync()
+    {
+        try { customers = await Pipeline.GetCustomersAsync(100); }
+        catch { customers = new(); }
+    }
+
+    private List<PosCustomerDto> FilteredCustomers
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(customerSearch))
+                return customers;
+            var s = customerSearch.Trim().ToLowerInvariant();
+            return customers.Where(c => c.Name.ToLowerInvariant().Contains(s)
+                || c.Email.ToLowerInvariant().Contains(s)
+                || c.Phone.ToLowerInvariant().Contains(s)
+                || c.Vat.ToLowerInvariant().Contains(s)).ToList();
+        }
+    }
+
+    private void OnCustomerChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var v) && v == -1)
+        {
+            custName = custEmail = custPhone = custVat = string.Empty;
+            showCustomerModal = true;
+            return;
+        }
+        selectedPartnerId = v;
+    }
+
+    private async Task SaveCustomerAsync()
+    {
+        if (isSavingCustomer || string.IsNullOrWhiteSpace(custName)) return;
+        isSavingCustomer = true;
+        StateHasChanged();
+        try
+        {
+            var id = await Pipeline.CreateCustomerAsync(custName, custEmail, custPhone, custVat);
+            await LoadCustomersAsync();
+            customerSearch = string.Empty;
+            selectedPartnerId = id;
+            showCustomerModal = false;
+        }
+        catch (Exception ex)
+        {
+            payError = $"No se pudo registrar el cliente: {ex.Message}";
+        }
+        finally
+        {
+            isSavingCustomer = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadProductsAsync()
+    {
+        isLoadingProducts = true;
+        loadError = null;
+        StateHasChanged();
+        try
+        {
+            // Sesión POS con su estado (opened / opening_control / cerrada) + bundle.
+            await RefreshSessionAsync();
+
+            // Surtido oficial por caja: limit_categories + iface_available_categ_ids.
+            // Sin sesión abierta no hay caja que restrinja: se muestra todo lo POS.
+            int? configId = sessionData?.Session.ConfigId;
+            posCategories = await Pipeline.GetPosCategoriesAsync(configId);
+
+            // Etapa 7 del pipeline: productos jsonAPI del POS
+            var list = await Pipeline.GetPosProductsAsync(configId, 200);
+            var catNames = posCategories.ToDictionary(c => c.Id, c => c.Name);
+            products = list.Select(p => new ProductDto
+            {
+                Id = p.Id,
+                Name = p.Name,
+                Price = p.Price,
+                QtyAvailable = p.QtyAvailable,
+                Category = p.PosCategIds is { Count: > 0 } && catNames.TryGetValue(p.PosCategIds[0], out var cn) ? cn : "Sin categoría",
+                TaxIds = p.TaxIds ?? new(),
+                PosCategIds = p.PosCategIds ?? new()
+            }).ToList();
+
+            if (selectedPosCategId != 0 && posCategories.All(c => c.Id != selectedPosCategId))
+                selectedPosCategId = 0;
+
+            if (products.Count == 0)
+                products = DemoCatalog();
+        }
+        catch (Exception ex)
+        {
+            loadError = ex.Message;
+            products = DemoCatalog();
+        }
+        finally
+        {
+            isLoadingProducts = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadPosConfigsAsync()
+    {
+        try
+        {
+            // Etapa 2 del pipeline: POS configurations
+            var configs = await Pipeline.GetConfigurationsAsync();
+            posConfigs = configs.Select(c => new PosConfigDto { Id = c.Id, Name = c.Name }).ToList();
+
+            if (selectedConfigId == 0 && posConfigs.Count > 0)
+                selectedConfigId = posConfigs[0].Id;
+        }
+        catch
+        {
+            posConfigs = new();
+        }
+    }
+
+    private async Task RefreshSessionAsync()
+    {
+        var info = await OdooService.GetActiveSessionAsync();
+        sessionId = info?.Id;
+        sessionState = info?.State;
+        // Etapa 6 del pipeline: bundle de sesión (config, pagos, impuestos)
+        if (sessionId.HasValue && info!.IsOpened)
+        {
+            try { sessionData = await Pipeline.LoadSessionDataAsync(sessionId.Value); }
+            catch { sessionData = null; }
+        }
+        else
+        {
+            sessionData = null;
+        }
+        // PDV disponibles para el modal de apertura
+        if (!sessionId.HasValue)
+            await LoadPosConfigsAsync();
+    }
+
+    private async Task OpenSessionModal()
+    {
+        openingCash = 0;
+        closingCash = 0;
+        cashNotes = string.Empty;
+        closingData = null;
+        closeLoadError = null;
+        showForceClose = false;
+        if (!sessionId.HasValue && posConfigs.Count == 0)
+            await LoadPosConfigsAsync();
+        showSessionModal = true;
+        StateHasChanged();
+
+        await ReloadClosingDataAsync();
+    }
+
+    /// <summary>Etapa 11: (re)carga datos de cierre; el error queda visible en closeLoadError.</summary>
+    private async Task ReloadClosingDataAsync()
+    {
+        if (!sessionId.HasValue || (sessionState != "opened" && sessionState != "closing_control"))
+            return;
+
+        isLoadingClosing = true;
+        closeLoadError = null;
+        StateHasChanged();
+        try
+        {
+            closingData = await Pipeline.GetClosingControlDataAsync(sessionId.Value);
+        }
+        catch (Exception ex)
+        {
+            closingData = null;
+            var flat = ex.Message.Replace("\r", " ").Replace("\n", " ").Trim();
+            closeLoadError = flat.Length > 300 ? flat[..300] + "…" : flat;
+        }
+        finally
+        {
+            isLoadingClosing = false;
+            StateHasChanged();
+        }
+    }
+
+    private void CloseSessionModal()
+    {
+        if (!isProcessingSession)
+            showSessionModal = false;
+    }
+
+    /// <summary>
+    /// Confirma el modal: abrir (con efectivo inicial), iniciar (caja en
+    /// opening_control) o cerrar la caja, como en el Odoo original.
+    /// </summary>
+    private async Task ConfirmSessionModalAsync()
+    {
+        if (isProcessingSession) return;
+        isProcessingSession = true;
+        payError = null;
+        payMessage = null;
+        StateHasChanged();
+        try
+        {
+            if (!sessionId.HasValue)
+            {
+                if (selectedConfigId <= 0)
+                {
+                    payError = "Selecciona un punto de venta para abrir la caja.";
+                    return;
+                }
+                // Guarda: si ese PDV ya tiene caja abierta, no se crea otra
+                // (Odoo lo rechaza); se cambia el modal a continuarla.
+                var existing = await OdooService.GetSessionForConfigAsync(selectedConfigId);
+                if (existing is not null && existing.Id > 0)
+                {
+                    sessionId = existing.Id;
+                    sessionState = existing.State;
+                    payError = existing.IsClosing
+                        ? $"Ese punto de venta ya tiene la caja #{existing.Id} en control de cierre. Usa “Terminar cierre”."
+                        : $"Ese punto de venta ya tiene la caja #{existing.Id} abierta. Usa “Iniciar caja”.";
+                    return;
+                }
+                // Etapas 3+5: open register y luego opening control (como el dashboard)
+                var newId = await Pipeline.OpenRegisterAsync(selectedConfigId);
+                await Pipeline.SetOpeningControlAsync(newId, openingCash, cashNotes);
+                await RefreshSessionAsync();
+                payMessage = $"Caja abierta en Odoo (sesión #{newId}) con ${openingCash:0.00} iniciales. Ya puedes cobrar.";
+            }
+            else if (sessionState == "opening_control")
+            {
+                // Etapa 5: set opening control
+                await Pipeline.SetOpeningControlAsync(sessionId.Value, openingCash, cashNotes);
+                await RefreshSessionAsync();
+                payMessage = $"Caja #{sessionId} iniciada con ${openingCash:0.00} iniciales.";
+            }
+            else
+            {
+                // Etapa 12: post closing detail
+                await Pipeline.PostClosingDetailsAsync(sessionId.Value, new PosClosingDetails(closingCash, cashNotes));
+                sessionId = null;
+                sessionState = null;
+                sessionData = null;
+                closingData = null;
+                await LoadPosConfigsAsync();
+                payMessage = "Caja cerrada en Odoo.";
+            }
+            showSessionModal = false;
+            openingCash = 0;
+            closingCash = 0;
+            cashNotes = string.Empty;
+        }
+        catch (Exception ex)
+        {
+            if (ex.Message.Contains("Another session is already opened", StringComparison.OrdinalIgnoreCase))
+            {
+                // Hay una sesión atorada (normalmente en control de cierre): recarga para
+                // mostrarla y ofrece terminarla en vez de insistir en crear otra.
+                await RefreshSessionAsync();
+                payError = sessionId.HasValue
+                    ? $"No se pudo abrir otra caja: la sesión #{sessionId} sigue sin cerrarse en Odoo. Usa “{(sessionState == "closing_control" ? "Terminar cierre" : "Iniciar caja")}”."
+                    : "No se pudo abrir la caja: Odoo reporta otra sesión abierta para este punto de venta.";
+            }
+            else
+            {
+                payError = ex.Message;
+                // Odoo exige el wizard de forzado: revela el botón de cierre forzado
+                if (ex.Message.Contains("Force Close", StringComparison.OrdinalIgnoreCase)
+                    || ex.Message.Contains("backend", StringComparison.OrdinalIgnoreCase))
+                    showForceClose = true;
+            }
+        }
+        finally
+        {
+            isProcessingSession = false;
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>Etapa 12b: forzado vía pos.close.session.wizard (acepta el descuadre).</summary>
+    private async Task ForceCloseAsync()
+    {
+        if (isProcessingSession || !sessionId.HasValue) return;
+        isProcessingSession = true;
+        payError = null;
+        payMessage = null;
+        StateHasChanged();
+        try
+        {
+            await Pipeline.ForceCloseSessionAsync(sessionId.Value);
+            sessionId = null;
+            sessionState = null;
+            sessionData = null;
+            closingData = null;
+            showForceClose = false;
+            await LoadPosConfigsAsync();
+            payMessage = "Caja cerrada en Odoo (cierre forzado con descuadre aceptado).";
+            showSessionModal = false;
+        }
+        catch (Exception ex)
+        {
+            payError = ex.Message;
+        }
+        finally
+        {
+            isProcessingSession = false;
+            StateHasChanged();
+        }
+    }
+
+    private void AddToCart(ProductDto p) => AddToCartQty(p, 1);
+
+    private void AddToCartQty(ProductDto p, int qty)
+    {
+        stockNotice = null;
+        if (p.QtyAvailable <= 0 || qty <= 0) return;
+        var max = (int)Math.Floor(p.QtyAvailable);
+        // Impuestos reales del producto (del bundle de sesión): misma base que Odoo usará.
+        // Sin impuestos configurados en Odoo → tasa fiscal por defecto (Pos:DefaultTaxRate).
+        var taxIds = p.TaxIds ?? new();
+        var rate = taxIds.Count == 0
+            ? DefaultTaxRate
+            : sessionData?.Taxes.Where(t => taxIds.Contains(t.Id)).Sum(t => t.Amount) ?? 0m;
+        var existing = cart.FirstOrDefault(i => i.ProductId == p.Id);
+        var current = existing?.Qty ?? 0;
+        if (current >= max)
+        {
+            stockNotice = $"“{p.Name}” solo tiene {p.QtyAvailable:0.##} en existencia.";
+            showProductModal = false;
+            return;
+        }
+        var take = Math.Min(qty, max - current);
+        if (existing is null)
+            cart.Add(new CartItem { ProductId = p.Id, Name = p.Name, UnitPrice = p.Price, Qty = take, TaxIds = new(taxIds), TaxRate = rate, StockQty = p.QtyAvailable });
+        else
+        {
+            existing.Qty += take;
+            existing.StockQty = p.QtyAvailable;
+        }
+        if (take < qty)
+            stockNotice = $"Solo se agregaron {take} de “{p.Name}” (existencia: {p.QtyAvailable:0.##}).";
+        showProductModal = false;
+    }
+
+    // Etapa 8 del pipeline: ficha del producto
+    private async Task OpenProductModal(ProductDto p)
+    {
+        modalProduct = p;
+        modalQty = 1;
+        selectedInfo = null;
+        showProductModal = true;
+        isLoadingInfo = true;
+        try { selectedInfo = await Pipeline.GetProductInfoAsync(p.Id); }
+        catch { selectedInfo = null; }
+        finally { isLoadingInfo = false; StateHasChanged(); }
+    }
+
+    private void CloseProductModal()
+    {
+        showProductModal = false;
+        modalProduct = null;
+        selectedInfo = null;
+    }
+
+    private string InfoTaxNames()
+    {
+        if (selectedInfo is null || sessionData is null) return "—";
+        var names = sessionData.Taxes.Where(t => selectedInfo.TaxIds.Contains(t.Id)).Select(t => t.Name).ToList();
+        return names.Count > 0 ? string.Join(", ", names) : "Sin impuestos";
+    }
+
+    private string CashMethodLabel => sessionData?.PaymentMethods.FirstOrDefault(m => m.IsCash)?.Name ?? "Moneda exacta / cambio";
+    private string CardMethodLabel => sessionData?.PaymentMethods.FirstOrDefault(m => !m.IsCash)?.Name ?? "Terminal / NFC";
+    private int? CashMethodId => sessionData?.PaymentMethods.FirstOrDefault(m => m.IsCash)?.Id;
+    private int? CardMethodId => sessionData?.PaymentMethods.FirstOrDefault(m => !m.IsCash)?.Id;
+
+    private static bool AtMax(CartItem item)
+        => item.StockQty > 0 && item.Qty >= (int)Math.Floor(item.StockQty);
+
+    private void IncreaseQty(CartItem item)
+    {
+        stockNotice = null;
+        if (AtMax(item))
+        {
+            stockNotice = $"“{item.Name}” solo tiene {item.StockQty:0.##} en existencia.";
+            return;
+        }
+        item.Qty++;
+    }
+
+    private void DecreaseQty(CartItem item)
+    {
+        stockNotice = null;
+        item.Qty--;
+        if (item.Qty <= 0)
+            cart.Remove(item);
+    }
+
+    private void Remove(CartItem item)
+    {
+        stockNotice = null;
+        cart.Remove(item);
+    }
+
+    private void ClearCart()
+    {
+        stockNotice = null;
+        cart.Clear();
+    }
+
+    private Task CheckoutCash() => CheckoutAsync("cash", CashMethodId);
+    private Task CheckoutCard() => CheckoutAsync("card", CardMethodId);
+
+    // Etapa 9 del pipeline: POS Order Case (sync_from_ui con método de pago real)
+    private async Task CheckoutAsync(string method, int? paymentMethodId)
+    {
+        if (cart.Count == 0 || isPaying) return;
+        isPaying = true;
+        payMessage = null;
+        payError = null;
+        StateHasChanged();
+        try
+        {
+            // Revalida la caja aquí (estado incluido): solo 'opened' puede cobrar.
+            var info = await OdooService.GetActiveSessionAsync();
+            sessionId = info?.Id;
+            sessionState = info?.State;
+
+            if (info is null)
+            {
+                payError = "La caja está cerrada. Usa el botón “Abrir caja” del banner superior para abrirla sin salir de esta pantalla.";
+                await LoadPosConfigsAsync();
+                return;
+            }
+
+            if (!info.IsOpened)
+            {
+                payError = info.IsClosing
+                    ? $"La caja #{info.Id} está en control de cierre. Usa el botón “Terminar cierre” para liberarla antes de vender."
+                    : $"La caja #{info.Id} aún no está iniciada. Usa el botón “Iniciar caja” e indica el efectivo inicial.";
+                return;
+            }
+
+            // Blindaje multicancha: revalida existencias justo antes de sincronizar
+            // (otro cajero pudo vender). Una sola lectura; si falla, no bloquea la venta.
+            try
+            {
+                var stock = await Pipeline.GetStockAsync(cart.Select(i => i.ProductId).ToList());
+                if (stock.Count > 0)
+                {
+                    foreach (var p in products)
+                        if (stock.TryGetValue(p.Id, out var a))
+                            p.QtyAvailable = a;
+
+                    var shortages = new List<string>();
+                    foreach (var item in cart)
+                    {
+                        if (!stock.TryGetValue(item.ProductId, out var avail))
+                            continue;
+                        item.StockQty = avail;
+                        if (avail <= 0)
+                            shortages.Add($"“{item.Name}” se agotó.");
+                        else if (item.Qty > (int)Math.Floor(avail))
+                            shortages.Add($"“{item.Name}”: pides {item.Qty}, hay {avail:0.##}.");
+                    }
+                    if (shortages.Count > 0)
+                    {
+                        payError = "Existencias insuficientes: " + string.Join(" ", shortages) + " Ajusta el ticket e intenta de nuevo.";
+                        return;
+                    }
+                }
+            }
+            catch
+            {
+                // Sin dato fresco no se bloquea la venta; Odoo es la fuente final.
+            }
+
+            // Etapa 9: sync_from_ui con el método de pago del config (puede ser null
+            // y el servicio resuelve el primero disponible). info.IsOpened lo garantiza.
+            var orderId = await Pipeline.CreateOrderAsync(info.Id, cart, Total, paymentMethodId, partnerId: selectedPartnerId > 0 ? selectedPartnerId : null);
+            // Ticket estilo Odoo (ReceiptScreen): se captura antes de vaciar el carrito
+            lastTicket = new TicketDto
+            {
+                OrderId = orderId,
+                SessionId = info.Id,
+                ConfigName = string.IsNullOrEmpty(sessionData?.ConfigName) ? "Punto de Venta" : sessionData.ConfigName,
+                Date = DateTime.Now,
+                Cashier = string.IsNullOrEmpty(AuthState.Username) ? "Cajero Odoo" : AuthState.Username,
+                Customer = selectedPartnerId > 0 ? customers.FirstOrDefault(c => c.Id == selectedPartnerId)?.Name ?? "Cliente" : "Cliente Mostrador",
+                MethodLabel = method == "cash" ? $"Efectivo ({CashMethodLabel})" : $"Tarjeta ({CardMethodLabel})",
+                Lines = cart.Select(i => new TicketLine(i.Name, i.Qty, i.UnitPrice, i.LineTotal)).ToList(),
+                Subtotal = Subtotal,
+                Tax = Iva,
+                Total = Total
+            };
+            payMessage = $"Orden #{orderId} creada en sesión #{info.Id} ({method}). Total ${Total:0.00}.";
+            cart.Clear();
+            showTicketModal = true;
+        }
+        catch (Exception ex)
+        {
+            payError = ex.Message.Contains("session_id", StringComparison.OrdinalIgnoreCase)
+                ? "La caja está cerrada. Usa el botón “Abrir caja” del banner superior y vuelve a intentar."
+                : $"No se pudo crear la orden: {ex.Message}";
+        }
+        finally
+        {
+            isPaying = false;
+            StateHasChanged();
+            await LoadProductsAsync();
+        }
+    }
+
+    private static List<ProductDto> DemoCatalog() => new()
+    {
+        new() { Id = 1, Name = "Flat White Doble", Category = "bebidas", Price = 4.50m, QtyAvailable = 48 },
+        new() { Id = 2, Name = "Croissant Mantequilla", Category = "comida", Price = 3.50m, QtyAvailable = 12 },
+        new() { Id = 3, Name = "Cold Brew Botella 250ml", Category = "bebidas", Price = 5.00m, QtyAvailable = 4 },
+        new() { Id = 4, Name = "Brownie Fudge Chocolate", Category = "postres", Price = 3.00m, QtyAvailable = 19 },
+        new() { Id = 5, Name = "Sandwich Caprese Pesto", Category = "comida", Price = 7.50m, QtyAvailable = 15 },
+        new() { Id = 6, Name = "Bagel Salmón & Queso", Category = "comida", Price = 8.20m, QtyAvailable = 8 },
+        new() { Id = 7, Name = "Matcha Ceremonial Latte", Category = "bebidas", Price = 5.50m, QtyAvailable = 0 },
+    };
+
+    private static int GetInt(Dictionary<string, JsonElement> r, string key)
+        => r.TryGetValue(key, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt32() : 0;
+
+    private static string GetString(Dictionary<string, JsonElement> r, string key)
+        => r.TryGetValue(key, out var v) ? v.ValueKind switch
+        {
+            JsonValueKind.String => v.GetString() ?? string.Empty,
+            JsonValueKind.Number => v.ToString(),
+            _ => string.Empty
+        } : string.Empty;
+
+    private static decimal GetDecimal(Dictionary<string, JsonElement> r, string key)
+    {
+        if (!r.TryGetValue(key, out var v)) return 0;
+        return v.ValueKind switch
+        {
+            JsonValueKind.Number => v.TryGetDecimal(out var d) ? d : 0,
+            JsonValueKind.String => decimal.TryParse(v.GetString(), out var d) ? d : 0,
+            _ => 0
+        };
+    }
+
+    public sealed class PosConfigDto
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+    }
+
+    public sealed class ProductDto
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string Category { get; set; } = string.Empty;
+        public decimal Price { get; set; }
+        public decimal QtyAvailable { get; set; }
+        public List<int> TaxIds { get; set; } = new();
+        public List<int> PosCategIds { get; set; } = new();
+    }
+
+    private string OdooBase => (Configuration["Odoo:Url"] ?? "").TrimEnd('/');
+    private string ImgUrl(int id) => $"{OdooBase}/web/image?model=product.product&field=image_128&id={id}";
+    private const string PlaceholderImg = "https://www.gstatic.com/labs-code/stitch/stitch-placeholder-300x300.svg";
+
+    private async Task PrintTicketAsync()
+    {
+        // Impresión aislada en iframe (documento standalone): evita el error de JS
+        // que el entorno de la página provocaba con window.print directo.
+        if (lastTicket is null) return;
+        try
+        {
+            var ok = await JSRuntime.InvokeAsync<bool>("odooPrint.printHtml", "print-frame", BuildTicketHtml());
+            if (!ok)
+                payError = "No se pudo abrir la impresión (iframe no disponible).";
+        }
+        catch { /* sin JS (prerender): se ignora */ }
+    }
+
+    /// <summary>Documento térmico standalone (sin Tailwind/Bootstrap): 80mm, solo texto.</summary>
+    private string BuildTicketHtml()
+    {
+        var t = lastTicket!;
+        static string E(string? s) => System.Net.WebUtility.HtmlEncode(s ?? string.Empty);
+        static string M(decimal v) => v.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+        var sb = new StringBuilder();
+        sb.Append("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Ticket #");
+        sb.Append(t.OrderId);
+        sb.Append("</title><style>");
+        sb.Append("body{font-family:'Courier New',monospace;font-size:12px;color:#000;width:72mm;margin:0 auto;padding:4mm 2mm;}");
+        sb.Append("h1{font-size:15px;text-align:center;margin:0 0 2px;}");
+        sb.Append("p{margin:1px 0;}table{width:100%;border-collapse:collapse;}td{vertical-align:top;padding:1px 0;}");
+        sb.Append(".r{text-align:right;}.c{text-align:center;}.tot{font-size:15px;font-weight:bold;}");
+        sb.Append("hr{border:none;border-top:1px dashed #000;margin:6px 0;}");
+        sb.Append("</style></head><body>");
+        sb.Append("<h1>").Append(E(t.ConfigName)).Append("</h1>");
+        sb.Append("<p class=\"c\">Ticket de venta</p><hr>");
+        sb.Append("<table>");
+        sb.Append("<tr><td>Orden</td><td class=\"r\"><b>#").Append(t.OrderId).Append("</b></td></tr>");
+        sb.Append("<tr><td>Fecha</td><td class=\"r\">").Append(E(t.Date.ToString("dd/MM/yyyy HH:mm"))).Append("</td></tr>");
+        sb.Append("<tr><td>Cajero</td><td class=\"r\">").Append(E(t.Cashier)).Append("</td></tr>");
+        sb.Append("<tr><td>Cliente</td><td class=\"r\">").Append(E(t.Customer)).Append("</td></tr>");
+        sb.Append("<tr><td>Sesi&oacute;n</td><td class=\"r\">#").Append(t.SessionId).Append("</td></tr>");
+        sb.Append("</table><hr><table>");
+        foreach (var l in t.Lines)
+        {
+            sb.Append("<tr><td>").Append(l.Qty).Append(" x ").Append(E(l.Name))
+              .Append(" ($").Append(M(l.UnitPrice)).Append(")</td>")
+              .Append("<td class=\"r\"><b>$").Append(M(l.LineTotal)).Append("</b></td></tr>");
+        }
+        sb.Append("</table><hr><table>");
+        sb.Append("<tr><td>Subtotal</td><td class=\"r\">$").Append(M(t.Subtotal)).Append("</td></tr>");
+        sb.Append("<tr><td>IVA</td><td class=\"r\">$").Append(M(t.Tax)).Append("</td></tr>");
+        sb.Append("<tr class=\"tot\"><td>TOTAL</td><td class=\"r\">$").Append(M(t.Total)).Append("</td></tr>");
+        sb.Append("</table><hr><table>");
+        sb.Append("<tr><td>Pago</td><td class=\"r\">").Append(E(t.MethodLabel)).Append("</td></tr>");
+        sb.Append("<tr><td>Monto</td><td class=\"r\">$").Append(M(t.Total)).Append("</td></tr>");
+        sb.Append("<tr><td>Cambio</td><td class=\"r\">$0.00</td></tr>");
+        sb.Append("</table><hr><p class=\"c\"><b>&iexcl;Gracias por su compra!</b></p>");
+        sb.Append("</body></html>");
+        return sb.ToString();
+    }
+
+    public sealed record TicketLine(string Name, int Qty, decimal UnitPrice, decimal LineTotal);
+
+    public sealed class TicketDto
+    {
+        public int OrderId { get; set; }
+        public int SessionId { get; set; }
+        public string ConfigName { get; set; } = string.Empty;
+        public DateTime Date { get; set; }
+        public string Cashier { get; set; } = string.Empty;
+        public string Customer { get; set; } = string.Empty;
+        public string MethodLabel { get; set; } = string.Empty;
+        public List<TicketLine> Lines { get; set; } = new();
+        public decimal Subtotal { get; set; }
+        public decimal Tax { get; set; }
+        public decimal Total { get; set; }
+    }
+
+    // CartItem vive en Odoo.WebUI.Services (compartido con OdooService.CrearOrdenPosAsync).
+}
